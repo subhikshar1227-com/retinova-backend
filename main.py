@@ -45,7 +45,7 @@ app.add_middleware(
 
 # ----- local folders -----
 UPLOAD_FOLDER = "uploads"
-MODEL_FOLDER = "model"
+MODEL_FOLDER = "models"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(MODEL_FOLDER, exist_ok=True)
 
@@ -107,7 +107,7 @@ def _file_url_to_path(url: str | None):
 
 
 # ----- model / pipeline (lazy load) -----
-LOCAL_MODEL_PATH = os.path.join(MODEL_FOLDER, "retinova_model.h5")
+LOCAL_MODEL_PATH = os.path.join(MODEL_FOLDER, "retinova_model_tf2.h5")
 pipeline = None
 
 def get_pipeline():
