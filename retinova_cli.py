@@ -24,7 +24,7 @@ logging.getLogger("tensorflow").setLevel(logging.ERROR)
 logging.getLogger("absl").setLevel(logging.ERROR)
 
 
-DEFAULT_MODEL_PATH = "models/retinova_model.h5"
+DEFAULT_MODEL_PATH = "model/retinova_model_tf2.h5"
 CONF_THRESHOLD = 0.75  
 
 class RetiNovaCLI:
