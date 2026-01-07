@@ -24,7 +24,7 @@ logging.getLogger("tensorflow").setLevel(logging.ERROR)
 logging.getLogger("absl").setLevel(logging.ERROR)
 
 
-DEFAULT_MODEL_PATH = "models/retinova_model_tf2.h5"
+DEFAULT_MODEL_PATH = "models/retinova_model.h5"
 CONF_THRESHOLD = 0.75  
 
 class RetiNovaCLI:
@@ -277,6 +277,33 @@ class RetiNovaCLI:
         for ans in answers.values():
             final_conf = min(1.0, final_conf + float(self.choice_conf_map.get(ans, 0)))
         return final_conf, answers
+    
+    def apply_mcq_answers(self, condition, base_conf, answers_dict):
+        """
+        Non-interactive MCQ scoring (used only by API)
+
+        answers_dict format:
+        {
+            "Question text 1": "Low" | "Mild" | "Moderate" | "High",
+            ...
+        }
+
+        Returns: final_confidence (float)
+        """
+        questions = self.risk_questions.get(condition, [])
+        if not questions:
+            return float(base_conf)
+
+        final_conf = float(base_conf)
+
+        for ans in answers_dict.values():
+            # Same additive confidence logic as CLI
+            final_conf = min(
+                1.0,
+                final_conf + float(self.choice_conf_map.get(ans, 0.0))
+            )
+
+        return float(final_conf)
 
     def run_with_path(self, img_path):
         batch, rgb = self.preprocess_image_from_path(img_path)

@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from supabase import create_client, Client
-
+from fastapi import Body
 
 # Try to import your wrapper. If it fails, app will still start but endpoint will raise clear error.
 try:
@@ -107,7 +107,7 @@ def _file_url_to_path(url: str | None):
 
 
 # ----- model / pipeline (lazy load) -----
-LOCAL_MODEL_PATH = os.path.join(MODEL_FOLDER, "retinova_model_tf2.h5")
+LOCAL_MODEL_PATH = os.path.join(MODEL_FOLDER, "retinova_model.h5")
 pipeline = None
 
 def get_pipeline():
@@ -145,7 +145,74 @@ def get_pipeline():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+from fastapi import Body
 
+@app.post("/auth/register")
+def register_user(
+    user_id: str = Body(...),
+    user_email: str = Body(...)
+):
+    """
+    Creates a simple user record (no password).
+    Frontend must reuse this same user_id everywhere.
+    """
+
+    payload = {
+        "user_id": user_id,
+        "user_email": user_email,
+    }
+
+    try:
+        resp = supabase.table("users").insert(payload).execute()
+        _raise_if_response_error(resp, "insert users")
+    except Exception as e:
+        log.exception("User registration failed: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail="User already exists or invalid payload"
+        )
+
+    return {
+        "message": "User registered",
+        "user_id": user_id,
+        "user_email": user_email
+    }
+@app.post("/auth/login")
+def login_user(
+    user_id: str = Body(None),
+    user_email: str = Body(None)
+):
+    """
+    Login = existence check only.
+    """
+
+    if not user_id and not user_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide user_id or user_email"
+        )
+
+    query = supabase.table("users").select("*")
+
+    if user_id:
+        query = query.eq("user_id", user_id)
+    else:
+        query = query.eq("user_email", user_email)
+
+    resp = query.limit(1).execute()
+    _raise_if_response_error(resp, "select users")
+
+    rows = resp.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user = rows[0]
+
+    return {
+        "message": "Login success",
+        "user_id": user["user_id"],
+        "user_email": user["user_email"]
+    }
 # ----- main endpoint -----
 @app.post("/upload-and-process")
 async def upload_and_process(
@@ -307,25 +374,32 @@ async def upload_and_process(
         log.info("DEBUG grad_link=%s heat_link=%s", grad_link, heat_link)
         log.info("DEBUG grad_path=%s heat_path=%s", grad_path, heat_path)
 
-        
-        # Insert prediction row
         prediction_payload = {
     "image_id": image_id,
-    "disease": prediction,      # maps to 'disease' column
-    "probability": confidence   # 0–1 value
-    # predicted_at auto with default now()
+    "user_id": user_id,
+    "disease": prediction,
+    "probability": confidence,          # legacy field
+    "base_confidence": confidence,      # CNN only
+    "model_confidence": confidence,     # CNN only
+    "final_confidence": confidence,     # same before MCQ
+    "combined_confidence": confidence   # alias of final
 }
         _insert_table("predictions", prediction_payload)
 
-        # Insert results row
         results_payload = {
     "image_id": image_id,
+    "user_id": user_id,
     "user_email": user_email,
-    "final_accuracy": confidence,      # 0–1
-    "diagnosis_summary": prediction,    # string label# created_at auto
-    "json_report_url":json_signed,
-}
 
+    "final_accuracy": confidence,
+    "diagnosis_summary": prediction,
+    "json_report_url": json_signed,
+
+    "base_confidence": confidence,
+    "model_confidence": confidence,
+    "final_confidence": confidence,
+    "combined_confidence": confidence
+}
         _insert_table("results", results_payload)
 
         # Insert MCQ responses if present
@@ -352,4 +426,124 @@ async def upload_and_process(
             if os.path.exists(local_input_path):
                 os.remove(local_input_path)
         except Exception:
-            pass   
+            pass
+# ================= MCQ — FETCH QUESTIONS =================
+@app.get("/mcq/questions/{image_id}")
+def get_mcq_questions(image_id: str):
+    """
+    Returns the MCQ questions for the disease predicted for this image.
+    Frontend calls this AFTER upload.
+    """
+
+    # 1) Look up prediction for this image
+    pred_row = (
+        supabase.table("predictions")
+        .select("*")
+        .eq("image_id", image_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not pred_row.data:
+        raise HTTPException(status_code=404, detail="No prediction found for this image")
+
+    disease = pred_row.data[0].get("disease")
+
+    # 2) Pull question bank from wrapper
+    pipeline_instance = get_pipeline()
+    questions = pipeline_instance.risk_questions.get(disease, [])
+
+    return {
+        "image_id": image_id,
+        "disease": disease,
+        "question_count": len(questions),
+        "questions": [
+            {
+                "id": i,
+                "question": q,
+                "options": opts
+            }
+            for i, (q, opts) in enumerate(questions)
+        ]
+    }
+@app.post("/mcq/submit")
+def submit_mcq_answers(payload: dict = Body(...)):
+    image_id = payload.get("image_id")
+    user_id  = payload.get("user_id")
+    user_email = payload.get("user_email")
+    answers  = payload.get("answers", [])
+
+    if not image_id or not user_id or not answers:
+        raise HTTPException(
+            400,
+            "image_id, user_id and answers[] are required"
+        )
+
+    # ---- fetch latest prediction for base confidence ----
+    pred = (
+        supabase.table("predictions")
+        .select("*")
+        .eq("image_id", image_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not pred.data:
+        raise HTTPException(404, "No prediction found for image_id")
+
+    base_conf = float(pred.data[0].get("base_confidence", 0))
+    final_conf = base_conf
+
+    # ---- SAME confidence bump rule as wrapper ----
+    CONF_BUMPS = {
+        0: 0.00,  # Low / None
+        1: 0.05,  # Mild
+        2: 0.10,  # Moderate
+        3: 0.20   # High / Severe
+    }
+
+    rows_inserted = 0
+
+    for idx, ans in enumerate(answers):
+
+        choice_idx = ans.get("choice_index", 0)
+        choice_text = ans.get("choice") or ans.get("choice_text")
+
+        bump = CONF_BUMPS.get(choice_idx, 0.0)
+        final_conf = min(1.0, final_conf + bump)
+
+        row = {
+            "image_id": image_id,
+            "user_id": user_id,
+            "user_email": user_email,
+            "question_index": idx,
+            "selected_option_index": choice_idx,
+            "severity_level": choice_text,
+            "adjusted_confidence": final_conf
+            # responded_time will auto-fill if default now()
+        }
+
+        supabase.table("mcq_responses").insert(row).execute()
+        rows_inserted += 1
+
+    # ---- update predictions table ----
+    supabase.table("predictions").update({
+        "final_confidence": final_conf,
+        "combined_confidence": final_conf
+    }).eq("image_id", image_id).execute()
+
+    # ---- update results table ----
+    supabase.table("results").update({
+        "final_confidence": final_conf,
+        "combined_confidence": final_conf,
+        "final_accuracy": final_conf
+    }).eq("image_id", image_id).execute()
+
+    return {
+        "message": "MCQ responses stored successfully",
+        "answers_saved": rows_inserted,
+        "base_confidence": base_conf,
+        "final_confidence": final_conf
+    }
