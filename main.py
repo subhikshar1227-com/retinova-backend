@@ -492,10 +492,10 @@ def submit_mcq_answers(payload: dict = Body(...)):
     answers = payload.get("answers", [])
 
     log.info(
-    "MCQ PAYLOAD RECEIVED → image_id=%s answers=%s",
-    image_id,
-    answers
-)
+        "MCQ PAYLOAD RECEIVED → image_id=%s answers=%s",
+        image_id,
+        answers
+    )
 
     if not image_id or not answers:
         raise HTTPException(
@@ -527,9 +527,11 @@ def submit_mcq_answers(payload: dict = Body(...)):
         or pred.data[0].get("confidence")
         or 0
     )
+
     # 🔐 normalize confidence if stored as percentage
-if base_conf > 1:
-    base_conf = base_conf / 100
+    if base_conf > 1:
+        base_conf = base_conf / 100
+
     final_conf = base_conf
 
     log.info(
