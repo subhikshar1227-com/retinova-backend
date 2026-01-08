@@ -487,9 +487,9 @@ def get_mcq_questions_alias(image_id: str):
 @app.post("/mcq/submit")
 def submit_mcq_answers(payload: dict = Body(...)):
     image_id = payload.get("image_id")
-    user_id  = payload.get("user_id")
+    user_id = payload.get("user_id")
     user_email = payload.get("user_email")
-    answers  = payload.get("answers", [])
+    answers = payload.get("answers", [])
 
     if not image_id or not answers:
         raise HTTPException(
@@ -508,25 +508,28 @@ def submit_mcq_answers(payload: dict = Body(...)):
     )
 
     if not pred.data:
-        raise HTTPException(status_code=404, detail="No prediction found for image_id")
+        raise HTTPException(
+            status_code=404,
+            detail="No prediction found for image_id"
+        )
 
+    # ✅ SAFE BASE CONFIDENCE FALLBACK
     base_conf = float(
-    pred.data[0].get("base_confidence")
-    or pred.data[0].get("model_confidence")
-    or pred.data[0].get("probability")
-    or pred.data[0].get("confidence")
-    or 0
-)
-if not pred.data:
-    raise HTTPException(status_code=404, detail="No prediction found for image_id")
+        pred.data[0].get("base_confidence")
+        or pred.data[0].get("model_confidence")
+        or pred.data[0].get("probability")
+        or pred.data[0].get("confidence")
+        or 0
+    )
 
     final_conf = base_conf
-    log.info(
-    "MCQ SUBMIT → image_id=%s base_conf=%.4f final_conf=%.4f answers=%d",
-    image_id, base_conf, final_conf, len(answers)
-)
 
-    # ---- SAME confidence bump rule ----
+    log.info(
+        "MCQ SUBMIT → image_id=%s base_conf=%.4f final_conf=%.4f answers=%d",
+        image_id, base_conf, final_conf, len(answers)
+    )
+
+    # ---- confidence bump rule ----
     CONF_BUMPS = {
         0: 0.00,
         1: 0.05,
