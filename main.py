@@ -428,8 +428,9 @@ async def upload_and_process(
         except Exception:
             pass
 # ================= MCQ — FETCH QUESTIONS =================
-@app.get("/mcq/questions/{image_id}")
-def get_mcq_questions(image_id: str):
+@app.get("/mcq_questions/{image_id}")
+def get_mcq_questions_alias(image_id: str):
+    return get_mcq_questions(image_id)
     """
     Returns the MCQ questions for the disease predicted for this image.
     Frontend calls this AFTER upload.
@@ -462,7 +463,7 @@ def get_mcq_questions(image_id: str):
             {
                 "id": i,
                 "question": q,
-                "options": opts
+                "choices": opts
             }
             for i, (q, opts) in enumerate(questions)
         ]
