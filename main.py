@@ -431,10 +431,6 @@ async def upload_and_process(
 @app.get("/mcq_questions/{image_id}")
 def get_mcq_questions_alias(image_id: str):
     return get_mcq_questions(image_id)
-    """
-    Returns the MCQ questions for the disease predicted for this image.
-    Frontend calls this AFTER upload.
-    """
 
     # 1) Look up prediction for this image
     pred_row = (
@@ -451,11 +447,26 @@ def get_mcq_questions_alias(image_id: str):
 
     disease = pred_row.data[0].get("disease")
 
-    # 2) Pull question bank from wrapper
-    pipeline_instance = get_pipeline()
-    questions = pipeline_instance.risk_questions.get(disease, [])
 
-    return {
+    # 2) Pull question bank from wrapper
+pipeline_instance = get_pipeline()
+risk_bank = getattr(pipeline_instance, "risk_questions", {})
+
+disease_key = disease.strip().lower()
+
+questions = (
+    risk_bank.get(disease_key)
+    or risk_bank.get(disease)
+    or []
+)
+
+# ✅ ADD THIS LOG RIGHT HERE
+log.info(
+    "MCQ FETCH → image_id=%s disease=%s questions=%d",
+    image_id, disease, len(questions)
+)
+
+return {
         "image_id": image_id,
         "disease": disease,
         "question_count": len(questions),
@@ -475,12 +486,11 @@ def submit_mcq_answers(payload: dict = Body(...)):
     user_email = payload.get("user_email")
     answers  = payload.get("answers", [])
 
-    if not image_id or not user_id or not answers:
-        raise HTTPException(
-            400,
-            "image_id, user_id and answers[] are required"
-        )
-
+if not image_id or not answers:
+    raise HTTPException(
+        status_code=400,
+        detail="image_id and answers[] are required"
+    )
     # ---- fetch latest prediction for base confidence ----
     pred = (
         supabase.table("predictions")
@@ -509,8 +519,8 @@ def submit_mcq_answers(payload: dict = Body(...)):
 
     for idx, ans in enumerate(answers):
 
-        choice_idx = ans.get("choice_index", 0)
-        choice_text = ans.get("choice") or ans.get("choice_text")
+        choice_idx = ans.get("selected_option_index", 0)
+        choice_text = ans.get("choice_text") or ans.get("choice") or ""
 
         bump = CONF_BUMPS.get(choice_idx, 0.0)
         final_conf = min(1.0, final_conf + bump)
