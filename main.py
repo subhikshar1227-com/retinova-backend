@@ -510,8 +510,21 @@ def submit_mcq_answers(payload: dict = Body(...)):
     if not pred.data:
         raise HTTPException(status_code=404, detail="No prediction found for image_id")
 
-    base_conf = float(pred.data[0].get("base_confidence", 0))
+    base_conf = float(
+    pred.data[0].get("base_confidence")
+    or pred.data[0].get("model_confidence")
+    or pred.data[0].get("probability")
+    or pred.data[0].get("confidence")
+    or 0
+)
+if not pred.data:
+    raise HTTPException(status_code=404, detail="No prediction found for image_id")
+
     final_conf = base_conf
+    log.info(
+    "MCQ SUBMIT → image_id=%s base_conf=%.4f final_conf=%.4f answers=%d",
+    image_id, base_conf, final_conf, len(answers)
+)
 
     # ---- SAME confidence bump rule ----
     CONF_BUMPS = {
@@ -555,6 +568,8 @@ def submit_mcq_answers(payload: dict = Body(...)):
         "combined_confidence": final_conf,
         "final_accuracy": final_conf
     }).eq("image_id", image_id).execute()
+
+    final_conf = round(final_conf, 4)
 
     return {
         "message": "MCQ responses stored successfully",
