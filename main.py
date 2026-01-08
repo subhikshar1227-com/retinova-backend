@@ -428,11 +428,13 @@ async def upload_and_process(
         except Exception:
             pass
 # ================= MCQ — FETCH QUESTIONS =================
-@app.get("/mcq_questions/{image_id}")
-def get_mcq_questions_alias(image_id: str):
-    return get_mcq_questions(image_id)
+@app.get("/mcq/questions/{image_id}")
+def get_mcq_questions(image_id: str):
+    """
+    Returns the MCQ questions for the disease predicted for this image.
+    """
 
-    # 1) Look up prediction for this image
+    # 1) Look up prediction
     pred_row = (
         supabase.table("predictions")
         .select("*")
@@ -447,26 +449,25 @@ def get_mcq_questions_alias(image_id: str):
 
     disease = pred_row.data[0].get("disease")
 
+    # 2) Pull question bank
+    pipeline_instance = get_pipeline()
+    risk_bank = getattr(pipeline_instance, "risk_questions", {})
 
-    # 2) Pull question bank from wrapper
-pipeline_instance = get_pipeline()
-risk_bank = getattr(pipeline_instance, "risk_questions", {})
+    disease_key = disease.strip().lower()
 
-disease_key = disease.strip().lower()
+    questions = (
+        risk_bank.get(disease_key)
+        or risk_bank.get(disease)
+        or []
+    )
 
-questions = (
-    risk_bank.get(disease_key)
-    or risk_bank.get(disease)
-    or []
-)
+    # ✅ DEBUG LOG
+    log.info(
+        "MCQ FETCH → image_id=%s disease=%s questions=%d",
+        image_id, disease, len(questions)
+    )
 
-# ✅ ADD THIS LOG RIGHT HERE
-log.info(
-    "MCQ FETCH → image_id=%s disease=%s questions=%d",
-    image_id, disease, len(questions)
-)
-
-return {
+    return {
         "image_id": image_id,
         "disease": disease,
         "question_count": len(questions),
@@ -479,6 +480,10 @@ return {
             for i, (q, opts) in enumerate(questions)
         ]
     }
+@app.get("/mcq_questions/{image_id}")
+def get_mcq_questions_alias(image_id: str):
+    return get_mcq_questions(image_id)
+
 @app.post("/mcq/submit")
 def submit_mcq_answers(payload: dict = Body(...)):
     image_id = payload.get("image_id")
@@ -486,11 +491,12 @@ def submit_mcq_answers(payload: dict = Body(...)):
     user_email = payload.get("user_email")
     answers  = payload.get("answers", [])
 
-if not image_id or not answers:
-    raise HTTPException(
-        status_code=400,
-        detail="image_id and answers[] are required"
-    )
+    if not image_id or not answers:
+        raise HTTPException(
+            status_code=400,
+            detail="image_id and answers[] are required"
+        )
+
     # ---- fetch latest prediction for base confidence ----
     pred = (
         supabase.table("predictions")
@@ -502,23 +508,22 @@ if not image_id or not answers:
     )
 
     if not pred.data:
-        raise HTTPException(404, "No prediction found for image_id")
+        raise HTTPException(status_code=404, detail="No prediction found for image_id")
 
     base_conf = float(pred.data[0].get("base_confidence", 0))
     final_conf = base_conf
 
-    # ---- SAME confidence bump rule as wrapper ----
+    # ---- SAME confidence bump rule ----
     CONF_BUMPS = {
-        0: 0.00,  # Low / None
-        1: 0.05,  # Mild
-        2: 0.10,  # Moderate
-        3: 0.20   # High / Severe
+        0: 0.00,
+        1: 0.05,
+        2: 0.10,
+        3: 0.20
     }
 
     rows_inserted = 0
 
     for idx, ans in enumerate(answers):
-
         choice_idx = ans.get("selected_option_index", 0)
         choice_text = ans.get("choice_text") or ans.get("choice") or ""
 
@@ -533,19 +538,18 @@ if not image_id or not answers:
             "selected_option_index": choice_idx,
             "severity_level": choice_text,
             "adjusted_confidence": final_conf
-            # responded_time will auto-fill if default now()
         }
 
         supabase.table("mcq_responses").insert(row).execute()
         rows_inserted += 1
 
-    # ---- update predictions table ----
+    # ---- update predictions ----
     supabase.table("predictions").update({
         "final_confidence": final_conf,
         "combined_confidence": final_conf
     }).eq("image_id", image_id).execute()
 
-    # ---- update results table ----
+    # ---- update results ----
     supabase.table("results").update({
         "final_confidence": final_conf,
         "combined_confidence": final_conf,
