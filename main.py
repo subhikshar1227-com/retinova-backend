@@ -580,3 +580,6 @@ def submit_mcq_answers(payload: dict = Body(...)):
         "base_confidence": base_conf,
         "final_confidence": final_conf
     }
+@app.post("/mcq_submit")
+def submit_mcq_answers_alias(payload: dict = Body(...)):
+    return submit_mcq_answers(payload)
